@@ -140,14 +140,18 @@ connect(Vers, Arguments, Conn) ->
 
 connection_args([Uri, ClientId, UserName, Password], Conn) ->
     lager:debug("Connecting ~s to ~p, id ~p, user ~p", [Conn#connector.connid, Uri, ClientId, UserName]),
-    {ok, ConnUri} = uri_string:parse(binary_to_list(Uri), [{scheme_defaults, [{mqtt, 1883}, {mqtts, 8883}]}]),
-    {Scheme, _UserInfo, HostName, Port, _Path, _Query} = ConnUri,
+    ConnUri = uri_string:parse(binary_to_list(Uri)),
+    Scheme = list_to_atom(maps:get(scheme, ConnUri)),
+	Host = maps:get(host, ConnUri),
+	Port = maps:get(port, ConnUri),
+    AuthArgs = auth_args(Host, Conn#connector.auth, ClientId, UserName, Password),
+    SslArgs = ssl_args(Scheme, Conn),
     lists:append([
-        [{host, HostName},
+        [{host, Host},
         {port, Port},
         {keepalive, 0}],
-        auth_args(HostName, Conn#connector.auth, ClientId, UserName, Password),
-        ssl_args(Scheme, Conn)
+        AuthArgs,
+        SslArgs
     ]).
 
 connect0([Ver | Rest], CArgs) ->
@@ -292,11 +296,9 @@ handle_info(Unknown, State) ->
     {noreply, State}.
 
 terminate(Reason, #state{conn=#connector{connid=ConnId}}) when Reason == normal; Reason == shutdown ->
-    lager:debug("Connector ~s terminated: ~p", [ConnId, Reason]),
-    ok;
+    lager:debug("Connector ~s terminated: ~p", [ConnId, Reason]);
 terminate(Reason, #state{conn=#connector{connid=ConnId}}) ->
-    lager:warning("Connector ~s terminated: ~p", [ConnId, Reason]),
-    ok.
+    lager:warning("Connector ~s terminated: ~p", [ConnId, Reason]).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
