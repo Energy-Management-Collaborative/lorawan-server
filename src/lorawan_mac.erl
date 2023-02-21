@@ -439,35 +439,41 @@ accept_rxwin(#profile{rxwin_set={A1,B1,_}}, #network{rxwin_init={A2,B2,C}}) ->
 accept_rxwin(_Else, ABC) ->
     ABC.
 
-encode_accept(#network{netid=NetID, rx1_delay=RxDelay, cflist=CFList}, #device{appkey=AppKey},
+encode_accept(#network{netid=NetID, rx1_delay=RxDelay, init_chans=Chans}, #device{appkey=AppKey},
         #node{devaddr=DevAddr, rxwin_use={RX1DROffset, RX2DataRate, _}}=Node, AppNonce) ->
-    lager:debug("Join-Accept ~p, netid ~p, cflist ~p, rx1droff ~p, rx2dr ~p, appkey ~p, appnce ~p",
-        [binary_to_hex(DevAddr), NetID, CFList, RX1DROffset, RX2DataRate,
+    lager:debug("Join-Accept ~p, netid ~p, chans ~p, rx1droff ~p, rx2dr ~p, appkey ~p, appnce ~p",
+        [binary_to_hex(DevAddr), NetID, Chans, RX1DROffset, RX2DataRate,
         binary_to_hex(AppKey), binary_to_hex(AppNonce)]),
     MHDR = <<2#001:3, 0:3, 0:2>>,
     MACPayload = <<AppNonce/binary, NetID/binary, (reverse(DevAddr))/binary, 0:1,
-        RX1DROffset:3, RX2DataRate:4, RxDelay, (encode_cflist(CFList))/binary>>,
+        RX1DROffset:3, RX2DataRate:4, RxDelay, (encode_cflist(Chans))/binary>>,
     MIC = crypto:macN(cmac, aes_128_cbc, AppKey, <<MHDR/binary, MACPayload/binary>>, 4),
 
     % yes, decrypt; see LoRaWAN specification, Section 6.2.5
     PHYPayload = crypto:crypto_one_time(aes_ecb, AppKey, padded(16, <<MACPayload/binary, MIC/binary>>), false),
     {ok, Node, <<MHDR/binary, PHYPayload/binary>>}.
 
-encode_cflist(List) when is_list(List), length(List) > 0, length(List) =< 5 ->
-    FreqList =
-        lists:foldr(
-            fun
-                ({Freq, _, _}, Acc) -> encode_cf(Freq, Acc);
-                % backwards compatibility
-                (Freq, Acc) -> encode_cf(Freq, Acc)
-            end,
-            <<>>, List),
-    padded(16, FreqList);
+% See LoRaWAN 1.1 Regional Parameters, Section 2.2.4 US902-928 Join-accept CFList
+% This encoding is only valid for regions which use a list of ChMask fields
+% These could be computed, but we're only expecting the common cases (8 sub-bands)
+encode_cflist([{0,7},{64,64}]) ->
+    <<16#00FF:16/little-unsigned-integer, 0:16, 0:16, 0:16, 16#0001:16/little-unsigned-integer, 0:16, 0:24, 1:8>>;
+encode_cflist([{8,15},{65,65}]) ->
+    <<16#FF00:16/little-unsigned-integer, 0:16, 0:16, 0:16, 16#0002:16/little-unsigned-integer, 0:16, 0:24, 1:8>>;
+encode_cflist([{16,23},{66,66}]) ->
+    <<0:16, 16#00FF:16/little-unsigned-integer, 0:16, 0:16, 16#0004:16/little-unsigned-integer, 0:16, 0:24, 1:8>>;
+encode_cflist([{24,31},{67,67}]) ->
+    <<0:16, 16#FF00:16/little-unsigned-integer, 0:16, 0:16, 16#0008:16/little-unsigned-integer, 0:16, 0:24, 1:8>>;
+encode_cflist([{32,39},{68,68}]) ->
+    <<0:16, 0:16, 16#00FF:16/little-unsigned-integer, 0:16, 16#0010:16/little-unsigned-integer, 0:16, 0:24, 1:8>>;
+encode_cflist([{40,47},{69,69}]) ->
+    <<0:16, 0:16, 16#FF00:16/little-unsigned-integer, 0:16, 16#0020:16/little-unsigned-integer, 0:16, 0:24, 1:8>>;
+encode_cflist([{48,55},{70,70}]) ->
+    <<0:16, 0:16, 0:16, 16#00FF:16/little-unsigned-integer, 16#0040:16/little-unsigned-integer, 0:16, 0:24, 1:8>>;
+encode_cflist([{56,63},{71,71}]) ->
+    <<0:16, 0:16, 0:16, 16#FF00:16/little-unsigned-integer, 16#0080:16/little-unsigned-integer, 0:16, 0:24, 1:8>>;
 encode_cflist(_Else) ->
     <<>>.
-
-encode_cf(Freq, Acc) ->
-    <<(trunc(Freq*10000)):24/little-unsigned-integer, Acc/binary>>.
 
 encode_unicast({_Network, #profile{adr_mode=ADR},
         #node{devaddr=DevAddr, nwkskey=NwkSKey, appskey=AppSKey}}, ACK, FOpts, TxData) ->
